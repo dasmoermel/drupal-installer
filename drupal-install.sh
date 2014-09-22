@@ -19,9 +19,8 @@ ques=${bldblu}?${txtrst}
 # Functions
 #
 check_connection() {
-  # checks MySQL Connection
+  # checks MySQL Connection with DB_User and DB_User_Pass @ DB_Host
   result=0
-  DB_Host=localhost
 
   until [[ $result = "1" ]]; do
 
@@ -30,39 +29,48 @@ check_connection() {
     done
 
     while [[ $DB_User_Pass = "" ]]; do
-      echo -n 'Please enter DB User Password for $DB_User (input hidden): '
+      echo -n 'Please enter DB User Password for DB User (input hidden): '
       stty -echo
       read DB_User_Pass
       stty echo
     done
-    read -p "Plaese enter DB Host [$DB_Host]: " DB_Host
 
-    MySQL_Con=$(mysql -u $DB_User --password=$DB_User_Pass --host=$DB_Host -e "show databases;"|grep "mysql")
+    #read -p "Plaese enter DB Host [$DB_Host]: " DB_Host
+
+    MySQL_Con=$(mysql -u $DB_User --password=$DB_User_Pass --host=localhost -e "show databases;"|grep "mysql")
+
     if ! [[ $MySQL_Con = "mysql" ]]; then
       DB_User=""
       DB_User_Pass=""
-      DB_Host=localhost
     else
       result=1
       echo "Connection works great!"
     fi
+
   done
 }
 
 check_DB(){
+  # checks if DB exists
   result=0
+
   until [[ $result = "1" ]]; do
+
     while [[ $DB_Name = "" ]]; do
       read -p "Please enter DB Name: " DB_Name
     done
-    DB_Con=$(mysql -u $DB_User --password=$DB_User_Pass --host=$DB_Host -e "show databases;"|grep "$DB_Name")
+
+    DB_Con=$(mysql -u $DB_User --password=$DB_User_Pass --host=localhost -e "show databases;"|grep "$DB_Name")
+
     if [[ $DB_Name = $DB_Con ]]; then
       result=1
       echo "DB exists!"
     else
-      #TODO: Add DB and grand permission
+      #TODO: Ask to create DB
+      echo "DB doesn't exist!"
       DB_Name=""
     fi
+
   done
 
 }
@@ -124,114 +132,113 @@ check_connection
 check_DB
 set_Drupal_Install
 
-
-echo -e $txtgre"\nBuild Drupal Filestructure\n"$txtrst
-drush make makefiles/drupal.make --y
-echo -e $txtgre"\nStating the installation of core\n"$txtrst
-drush si -y --db-url=mysql://$DB_User:$DB_User_Pass@$DB_Host/$DB_Name --account-name=$Drupal_Admin --account-pass=$Drupal_Admin_Pass --account-mail=$Drupal_Admin_Mail --site-name=$Drupal_Site_Name
-
-read -p "Download Features? " -n 1 -r
+read -p "Start installation? [Y/N] " -n 1 -r
 echo    # (optional) move to a new line
 if [[ $REPLY =~ ^[Yy]$ ]]
 then
-    drush make makefiles/features.make --y
+  echo -e $txtgre"\nBuild Drupal Filestructure\n"$txtrst
+  drush make makefiles/drupal.make --y
+
+  echo -e $txtgre"\nStating the installation of core\n"$txtrst
+  drush si -y --db-url=mysql://$DB_User:$DB_User_Pass@localhost/$DB_Name --account-name=$Drupal_Admin --account-pass=$Drupal_Admin_Pass --account-mail=$Drupal_Admin_Mail --site-name="$Drupal_Site_Name"
+
+
+  read -p "Disable default toolbar? [Yes|No]?" -n 1 -r
+  echo    # (optional) move to a new line
+  if [[ $REPLY =~ ^[Yy]$ ]]
+  then
+    drush dis toolbar --y
+    drush pm-uninstall toolbar --y
+  fi
+
+  echo "Select Drupal theme to install"
+  PS3='Please enter your choice: '
+  options=("Bootstrap $txtyel(https://drupal.org/project/bootstrap)$txtrst" "Zurb Foundation $txtyel(https://drupal.org/project/zurb-foundation)$txtrst" "Omega $txtyel(https://drupal.org/project/omega)$txtrst")
+  select opt in "${options[@]}"
+  do
+      echo -e $txtgre"\nInstall $Drupal_Theme theme\n"$txtrst
+      case "$REPLY" in
+          1 )
+              drush dl bootstrap --y
+              drush en bootstrap --y
+              break
+              ;;
+          2 )
+              drush dl zurb-foundation --y
+              drush en zurb-foundation --y
+              break
+              ;;
+          3 )
+              drush dl omega --y
+              drush en omega --y
+              drush cc drush
+              read -p "Create new Omega Subtheme [Yes|No]?" -n 1 -r
+              echo    # (optional) move to a new line
+              if [[ $REPLY =~ ^[Yy]$ ]]
+              then
+                drush owiz
+              fi
+              break
+              ;;
+          *) echo invalid option;;
+      esac
+  done
+
+
+  echo -e $txtgre"\nDownload and set admin theme to Adminimal\n"$txtrst
+  drush dl adminimal_theme
+  drush variable-set admin_theme adminimal
+
+  echo -e $txtgre"\nDownload modules and enable them\n"$txtrst
+  #drush dl ctools devel features entity panels views admin_menu adminimal_admin_menu pathauto strongarm token module_filter link field_group advanced_help libraries
+  drush en ctools ctools_custom_content page_manager devel features entity entity_token panels panels_mini views views_ui views_content admin_menu adminimal_admin_menu pathauto strongarm token module_filter link field_group advanced_help libraries -y
+
+  echo -e $txtgre"\nFix for Admin menu and Adminimal menu\n"$txtrst
+  drush variable-set admin_menu_margin_top 0
+  drush variable-set adminimal_admin_menu_render "hidden"
+
+
+  drush variable-set --format="string" jquery_update_jquery_version "1.10"
+  drush variable-set --format="string" jquery_update_jquery_admin_version "1.7"
+  drush variable-set --format="string" jquery_update_jquery_cdn "google"
+  drush variable-set --format="string" jquery_update_compression_type "min"
+  drush cc all
+
+  # enable languages
+  # TODO: Add more languages
+  read -p "Enable more languages[Yes|No]?" -n 1 -r
+  echo    # (optional) move to a new line
+  if [[ $REPLY =~ ^[Yy]$ ]]
+  then
+    drush dl drush_language
+    drush dl l10n_update --y
+    drush en l10n_update locale -y
+    mkdir sites/all/translations
+    drush vset l10n_update_download_store sites/all/translations
+
+    read -p "Which language to add? " lang
+    drush language-add $lang && drush language-enable
+    drush l10n-update-refresh
+    drush l10n-update
+    drush cc all
+
+    read -p "Set $lang as default language [Yes|No]?" -n 1 -r
+    echo    # (optional) move to a new line
+    if [[ $REPLY =~ ^[Yy]$ ]]
+    then
+      drush language-default $lang
+    fi
+
+    rm -Rf [A-Z]*
+  fi
+
+  drush cc all
+
+  echo -e $txtgre"\nInstallation is finished\n"$txtrst
+  echo -e $txtblu"Login information:"
+  echo -e $txtgre"Username:$txtred $drupaladminusernmae"
+  echo -e $txtgre"Password:$txtred $drupaladminpassword"
+  echo $txtrst
 fi
-
-
-#drush make makefiles/views.make --y
-
-#drush make makefiles/theme.make --y
-
-
-
-#echo "Select Drupal theme to install"
-#PS3='Please enter your choice: '
-#options=("Bootstrap $txtyel(https://drupal.org/project/bootstrap)$txtrst" "Zurb Foundation $txtyel(https://drupal.org/project/zurb-foundation)$txtrst" "Omega $txtyel(https://drupal.org/project/omega)$txtrst")
-#select opt in "${options[@]}"
-#do
-#    case "$REPLY" in
-#        1 )
-#            drupaltheme=bootstrap
-#            drupalthemedefault=bootstrap
-#            break
-#            ;;
-#        2 )
-#            drupaltheme=zurb-foundation
-#            drupalthemedefault=zurb_foundation
-#            break
-#            ;;
-#        3 )
-#            drupaltheme=omega
-#            drupalthemedefault=omega
-#            break
-#            ;;
-#        *) echo invalid option;;
-#    esac
-#done
-#
-#read -p "Start installation? [Y/N] " -n 1 -r
-#echo    # (optional) move to a new line
-#if [[ $REPLY =~ ^[Yy]$ ]]
-#then
-#  echo -e $txtgre"\nDownloading the latest version of drupal\n"$txtrst
-#  drush dl drupal --drupal-project-rename drupal
-#  cd drupal
-#
-#  echo -e $txtgre"\nStating the installation of core\n"$txtrst
-#  drush si -y --db-url=mysql://$DB_User:$DB_User_Pass@$DB_Host/$mysqldatabase --account-name=$drupaladminusernmae --account-pass=$drupaladminpassword --account-mail=$drupaladminmail
-#
-#  echo -e $txtgre"\nDownload and set admin theme to Adminimal\n"$txtrst
-#  drush dl adminimal_theme
-#  drush variable-set admin_theme adminimal
-#
-#  echo -e $txtgre"\nDisable unusable core modules"$txtrst
-#  drush dis toolbar overlay contextual -y
-#
-#  echo -e $txtgre"\nDownload modules and enable them\n"$txtrst
-#  drush dl ctools devel features entity panels views admin_menu adminimal_admin_menu pathauto strongarm token module_filter link field_group advanced_help libraries
-#  drush en ctools ctools_custom_content page_manager devel features entity entity_token panels panels_mini views views_ui views_content admin_menu adminimal_admin_menu pathauto strongarm token module_filter link field_group advanced_help libraries -y
-#
-#  echo -e $txtgre"\nDownload and install Backup and Migrate module\n"$txtrst
-#  cd sites/all/
-#  mkdir -p "libraries"
-#  cd libraries
-#  mkdir -p "dropbox"
-#  cd ../../../
-#  wget https://github.com/BenTheDesigner/Dropbox/archive/master.zip
-#  tar -xf master.zip
-#  mv "Dropbox-master/Dropbox/" "sites/all/libraries/dropbox"
-#  rm -rf Dropbox-master
-#  rm master.zip
-#  drush dl backup_migrate backup_migrate_files backup_migrate_dropbox
-#  drush en backup_migrate backup_migrate_files backup_migrate_dropbox -y
-#
-#  echo -e $txtgre"\nFix for Admin menu and Adminimal menu\n"$txtrst
-#  drush variable-set admin_menu_margin_top 0
-#  drush variable-set adminimal_admin_menu_render "hidden"
-#
-#  echo -e $txtgre"\nInstall jQuery Update\n"$txtrst
-#  drush dl jquery_update-7.x-2.x-dev
-#  drush en jquery_update -y
-#  drush variable-set --format="string" jquery_update_jquery_version "1.10"
-#  drush variable-set --format="string" jquery_update_jquery_admin_version "1.7"
-#  drush variable-set --format="string" jquery_update_jquery_cdn "google"
-#  drush variable-set --format="string" jquery_update_compression_type "min"
-#  drush cc all
-#
-#  echo -e $txtgre"\nInstall $drupaltheme theme\n"$txtrst
-#  drush dl $drupaltheme
-#  drush pm-enable $drupaltheme -y
-#  drush variable-set theme_default "$drupalthemedefault"
-#
-#  echo -e $txtgre"\nDisable unused themes\n"$txtrst
-#  drush pm-disable bartik -y
-#  drush pm-disable seven -y
-#
-#  echo -e $txtgre"\nInstallation is finished\n"$txtrst
-#  echo -e $txtblu"Login information:"
-#  echo -e $txtgre"Username:$txtred $drupaladminusernmae"
-#  echo -e $txtgre"Password:$txtred $drupaladminpassword"
-#  echo $txtrst
-#fi
 #
 
